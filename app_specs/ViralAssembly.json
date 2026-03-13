@@ -56,7 +56,8 @@
       "desc": "Strategy used for assembly",
       "enum": [
         "auto",
-	"irma"
+        "irma",
+        "reference_guided"
       ],
       "id": "strategy",
       "label": "Assembly strategy",
@@ -81,6 +82,42 @@
     },
     {
       "default": null,
+      "desc": "Reference type for reference-guided assembly",
+      "enum": [
+        "genbank",
+        "fasta"
+      ],
+      "id": "reference_type",
+      "label": "Reference type",
+      "required": 0,
+      "type": "enum"
+    },
+    {
+      "default": null,
+      "desc": "Reference assembly identifier or workspace path (e.g. GenBank accession or FASTA path)",
+      "id": "reference_assembly",
+      "label": "Reference assembly",
+      "required": 0,
+      "type": "string"
+    },
+    {
+      "default": null,
+      "desc": "GenBank accession to use as reference when reference type is GenBank",
+      "id": "genbank_accession",
+      "label": "GenBank accession",
+      "required": 0,
+      "type": "string"
+    },
+    {
+      "default": null,
+      "desc": "Workspace path or identifier of reference FASTA file when reference type is FASTA",
+      "id": "fasta_file",
+      "label": "Reference FASTA file",
+      "required": 0,
+      "type": "string"
+    },
+    {
+      "default": null,
       "desc": "Path to which the output will be written. Defaults to the directory containing the input data. ",
       "id": "output_path",
       "label": "Output Folder",
@@ -94,6 +131,14 @@
       "label": "File Basename",
       "required": 1,
       "type": "wsid"
+    },
+    {
+      "default": null,
+      "desc": "Email for NCBI Entrez (used when fetching GenBank accessions in reference-guided mode)",
+      "id": "email",
+      "label": "Entrez email",
+      "required": 0,
+      "type": "string"
     },
     {
       "default": 0,
