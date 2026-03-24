@@ -94,24 +94,16 @@
     },
     {
       "default": null,
-      "desc": "Reference assembly identifier or workspace path (e.g. GenBank accession or FASTA path)",
-      "id": "reference_assembly",
-      "label": "Reference assembly",
+      "desc": "GenBank accession(s) for reference-guided assembly when reference type is genbank (use ACC1;ACC2 for multiple)",
+      "id": "reference_input",
+      "label": "GenBank reference (accession)",
       "required": 0,
       "type": "string"
     },
     {
       "default": null,
-      "desc": "GenBank accession to use as reference when reference type is GenBank",
-      "id": "genbank_accession",
-      "label": "GenBank accession",
-      "required": 0,
-      "type": "string"
-    },
-    {
-      "default": null,
-      "desc": "Workspace path or identifier of reference FASTA file when reference type is FASTA",
-      "id": "fasta_file",
+      "desc": "Workspace path to reference FASTA when reference type is fasta (use path1;path2 for multiple files)",
+      "id": "reference_fasta_file",
       "label": "Reference FASTA file",
       "required": 0,
       "type": "string"

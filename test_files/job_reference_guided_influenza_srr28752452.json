@@ -1,8 +1,7 @@
 {
   "strategy": "reference_guided",
   "reference_type": "fasta",
-  "reference_assembly": "test_files/Influenza_Genome.fasta",
-  "fasta_file": "test_files/Influenza_Genome.fasta",
+  "reference_fasta_file": "test_files/Influenza_Genome.fasta",
   "output_file": "SRR28752452",
   "srr_id": "SRR28752452",
   "segment_names": [

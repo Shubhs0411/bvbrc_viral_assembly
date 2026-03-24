@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -250,6 +251,49 @@ def _bcftools_consensus_supports_regions() -> bool:
         return False
 
 
+def run_reference_guided_resolved(
+    *,
+    output_dir: str,
+    sample_name: str,
+    reference_type: str,
+    reference_tokens: List[str],
+    email: Optional[str],
+    read1: Optional[str] = None,
+    read2: Optional[str] = None,
+    read_single: Optional[str] = None,
+    segment_names: Optional[List[str]] = None,
+    per_segment_consensus: Optional[bool] = None,
+    align_threads: int = 0,
+    fastp_threads: int = 0,
+    region: Optional[str] = None,
+    depth_cutoff: int = 10,
+) -> Dict:
+    """
+    Preferred entrypoint: resolved inputs from run_viral_assembly (local paths, accessions).
+    """
+    if reference_type not in {"genbank", "fasta"}:
+        raise ValueError("reference_type must be 'genbank' or 'fasta'.")
+    if not reference_tokens:
+        raise ValueError("reference_tokens must contain at least one value.")
+
+    return run_reference_guided_core(
+        output_dir=output_dir,
+        sample_name=sample_name,
+        reference_type=reference_type,
+        reference_tokens=reference_tokens,
+        email=email,
+        read1=read1,
+        read2=read2,
+        read_single=read_single,
+        segment_names=segment_names,
+        per_segment_consensus=per_segment_consensus,
+        align_threads=align_threads,
+        fastp_threads=fastp_threads,
+        region=region,
+        depth_cutoff=depth_cutoff,
+    )
+
+
 def run_reference_guided(
     job_data: Dict,
     output_dir: str,
@@ -258,186 +302,84 @@ def run_reference_guided(
     read_single: Optional[str] = None,
 ) -> Dict:
     """
-    Run a single-sample reference-guided assembly using bwa/bcftools.
+    Entrypoint that accepts raw job JSON (requires reference_input for genbank
+    or reference_fasta_file for fasta — see run_viral_assembly._resolve_reference_inputs).
+    Stages SRA reads via sra_staging when srr_id is set and no reads were passed.
+    Prefer run_reference_guided_resolved from the run script for new code.
+    """
+    _scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
 
-    Inputs:
-      - job_data: job JSON dict, expected to include:
-          strategy: \"reference_guided\"
-          reference_type: \"genbank\" or \"fasta\"
-          reference_assembly / genbank_accession / fasta_file
-          email (optional; required for genbank)
-      - read1/read2/read_single: local FASTQ paths prepared by the caller
-    Outputs (in output_dir):
-      - <sample>.consensus.fasta
-      - <sample>.vcf.gz (+ index)
-      - QUAST output directory with report.txt and report.html
-    Returns:
-      - summary dict with keys: consensus_fasta, vcf, quast_txt, quast_html
+    if job_data.get("srr_id") and not (read1 or read2 or read_single):
+        from sra_staging import ensure_sra_fastqs
+
+        read1, read2, read_single = ensure_sra_fastqs(
+            output_dir, str(job_data["srr_id"]), job_data
+        )
+
+    import run_viral_assembly as rva
+
+    ref_type, ref_tokens = rva._resolve_reference_inputs(job_data)
+    sample_name = str(job_data.get("output_file") or job_data.get("srr_id") or "sample")
+    return run_reference_guided_resolved(
+        output_dir=output_dir,
+        sample_name=sample_name,
+        reference_type=ref_type,
+        reference_tokens=ref_tokens,
+        email=job_data.get("email") or os.environ.get("ENTREZ_EMAIL"),
+        read1=read1,
+        read2=read2,
+        read_single=read_single,
+        segment_names=_parse_string_list(job_data.get("segment_names")),
+        per_segment_consensus=job_data.get("per_segment_consensus"),
+        align_threads=int(job_data.get("align_threads", 0) or 0),
+        fastp_threads=int(job_data.get("fastp_threads", 0) or 0),
+        region=job_data.get("region"),
+        depth_cutoff=int(job_data.get("depth_cutoff", 10) or 10),
+    )
+
+
+def run_reference_guided_core(
+    *,
+    output_dir: str,
+    sample_name: str,
+    reference_type: str,
+    reference_tokens: List[str],
+    email: Optional[str],
+    read1: Optional[str] = None,
+    read2: Optional[str] = None,
+    read_single: Optional[str] = None,
+    segment_names: Optional[List[str]] = None,
+    per_segment_consensus: Optional[bool] = None,
+    align_threads: int = 0,
+    fastp_threads: int = 0,
+    region: Optional[str] = None,
+    depth_cutoff: int = 10,
+) -> Dict:
+    """
+    Reference-guided pipeline: trim, align, call variants, consensus, QUAST.
+    Expects local FASTQ paths and reference tokens (GenBank accessions or local FASTA paths).
     """
     outdir = ensure_dir(Path(output_dir))
 
-    # Naming convention:
-    # - If `srr_id` is provided, use it as the prefix for consensus/outputs.
-    # - Otherwise fall back to `output_file`.
-    # This ensures filenames look like: <SRA/sample>.consensus.<ref-label>.fasta
-    srr_id = job_data.get("srr_id")
-    sample_name = str(srr_id or job_data.get("output_file") or "sample")
-
-    reference_type = (job_data.get("reference_type") or "").lower()
+    reference_type = (reference_type or "").lower()
     if reference_type not in {"genbank", "fasta"}:
         raise ValueError("reference_type must be 'genbank' or 'fasta' for reference-guided strategy.")
 
-    email = job_data.get("email") or os.environ.get("ENTREZ_EMAIL")
-
-    # If job has srr_id:
-    #  - Always ensure a real "<outdir>/<SRR>/<SRR>.sra" exists (prefetch or local copy)
-    #  - Only run fasterq-dump when reads were not already provided by the caller.
-    reads_provided = bool(read1 or read2 or read_single)
-    if srr_id:
-        srr_out_dir = outdir  # keep downloads under the output root
-        sra_folder = ensure_dir(outdir / str(srr_id))
-        sra_path = sra_folder / f"{srr_id}.sra"
-
-        # Ensure SRA exists.
-        # Local testing note:
-        # - In many dev/WSL setups `prefetch` may be permission-limited.
-        # - If a valid local SRA file already exists (e.g. from a previous run),
-        #   copy it into the output folder to preserve the expected layout.
-        if not sra_path.exists() or sra_path.stat().st_size == 0:
-            # 1) Try copying an existing local SRA from common locations.
-            repo_root = Path(__file__).resolve().parents[1]
-            local_candidates = [
-                Path.cwd() / str(srr_id) / f"{srr_id}.sra",
-                repo_root / str(srr_id) / f"{srr_id}.sra",
-            ]
-            for cand in local_candidates:
-                if cand.exists() and cand.stat().st_size > 0:
-                    ensure_dir(sra_folder)
-                    shutil.copy2(str(cand), str(sra_path))
-                    break
-            else:
-                # 2) Optionally download if explicitly enabled.
-                if not bool(job_data.get("download_sra_from_prefetch", False)):
-                    raise RuntimeError(
-                        f"SRR SRA file not found at {sra_path} and local copy candidates are missing. "
-                        "Set job_data.download_sra_from_prefetch=true to enable `prefetch`, "
-                        "or provide read1/read2 to run without SRA download."
-                    )
-                try:
-                    run_command(
-                        f"prefetch -O {srr_out_dir} {srr_id}",
-                        f"prefetch {srr_id}",
-                    )
-                except Exception as e:
-                    raise RuntimeError(
-                        f"prefetch failed for {srr_id}: {e}"
-                    )
-
-        if not sra_path.exists() or sra_path.stat().st_size == 0:
-            # Be tolerant to different prefetch directory layouts.
-            candidates = sorted(
-                outdir.glob(f"**/{srr_id}.sra"),
-                key=lambda p: len(p.parts),
-            )
-            if candidates:
-                sra_path = candidates[0]
-            else:
-                raise RuntimeError(f"Expected SRA file not found after prefetch: {sra_path}")
-
-        if not reads_provided:
-            # Local parity note:
-            # Some environments (or CI) may not allow `fasterq-dump` due to
-            # disk/memory limits. By default we only ensure the SRA file exists;
-            # FASTQ download is opt-in via `download_fastqs_from_sra: true`.
-            download_fastqs = bool(job_data.get("download_fastqs_from_sra", False))
-            if not download_fastqs:
-                raise RuntimeError(
-                    f"Reads were not provided for SRR job {srr_id}. "
-                    "FASTQ download is disabled by default to avoid fasterq-dump "
-                    "resource limits. Set job_data.download_fastqs_from_sra=true "
-                    "to enable fasterq-dump."
-                )
-
-            fq1 = outdir / f"{srr_id}_1.fastq"
-            fq2 = outdir / f"{srr_id}_2.fastq"
-            fqs = outdir / f"{srr_id}.fastq"
-            alt_fq1 = outdir / str(srr_id) / f"{srr_id}_1.fastq"
-            alt_fq2 = outdir / str(srr_id) / f"{srr_id}_2.fastq"
-            alt_fqs = outdir / str(srr_id) / f"{srr_id}.fastq"
-
-            have_fastqs = (fq1.exists() and fq2.exists()) or fqs.exists() or (
-                alt_fq1.exists() and alt_fq2.exists()
-            ) or alt_fqs.exists()
-
-            if not have_fastqs:
-                fasterq_cmd = f"fasterq-dump -O {srr_out_dir} {srr_id}"
-                disk_limit = job_data.get("fasterq_dump_disk_limit")
-                disk_limit_tmp = job_data.get("fasterq_dump_disk_limit_tmp")
-                fasterq_temp_dir = job_data.get("fasterq_dump_temp_dir")
-                if disk_limit is not None:
-                    fasterq_cmd += f" --disk-limit {disk_limit}"
-                if disk_limit_tmp is not None:
-                    fasterq_cmd += f" --disk-limit-tmp {disk_limit_tmp}"
-                if fasterq_temp_dir:
-                    fasterq_cmd += f" --temp {fasterq_temp_dir}"
-                try:
-                    run_command(
-                        fasterq_cmd,
-                        f"fasterq-dump {srr_id}",
-                    )
-                except Exception as e:
-                    raise RuntimeError(
-                        "SRR-based job requires local SRA tool (`fasterq-dump`) "
-                        f"when reads are not provided. fasterq-dump failed for {srr_id}: {e}"
-                    )
-
-            # Pick the read files.
-            if fq1.exists() and fq2.exists():
-                read1 = str(fq1)
-                read2 = str(fq2)
-                read_single = None
-            elif fqs.exists():
-                read_single = str(fqs)
-                read1 = None
-                read2 = None
-            elif alt_fq1.exists() and alt_fq2.exists():
-                read1, read2 = str(alt_fq1), str(alt_fq2)
-                read_single = None
-            elif alt_fqs.exists():
-                read_single = str(alt_fqs)
-                read1, read2 = None, None
-            else:
-                raise RuntimeError(
-                    f"FASTQ files not found after fasterq-dump for {srr_id}."
-                )
+    email = email or os.environ.get("ENTREZ_EMAIL")
 
     # Use a dedicated output-files folder for non-primary artifacts.
     output_files_dir = ensure_dir(outdir / "output_files")
     # Resolve/cache references under output_files.
     ref_cache = ensure_dir(output_files_dir / "ref_cache")
 
-    segment_names = _parse_string_list(job_data.get("segment_names"))
-    ref_tokens = _parse_string_list(job_data.get("reference_fastas")) or _parse_string_list(job_data.get("references"))
-
-    ref_token = None
-    if reference_type == "genbank":
-        if not ref_tokens:
-            # BV-BRC UI may provide multiple accessions in `genbank_accession`
-            # separated by ';'. Support that by splitting into multiple ref tokens.
-            token_val = job_data.get("genbank_accession") or job_data.get("reference_assembly")
-            token_list = _parse_string_list(token_val)
-            if not token_list:
-                raise ValueError("genbank_accession or reference_assembly must be provided for GenBank references.")
-            if len(token_list) > 1:
-                # Treat as segmented/multi-ref input via the existing `ref_tokens` path.
-                ref_tokens = token_list
-            else:
-                ref_token = token_list[0]
-    elif reference_type == "fasta":
-        if not ref_tokens:
-            ref_token = job_data.get("fasta_file") or job_data.get("reference_assembly")
-            if not ref_token:
-                raise ValueError("fasta_file or reference_assembly must be provided for FASTA references.")
+    if len(reference_tokens) > 1:
+        ref_tokens = reference_tokens
+        ref_token = None
+    else:
+        ref_tokens = None
+        ref_token = reference_tokens[0]
 
     # Build a canonical reference multi-FASTA in the output directory.
     # - If multiple refs are given (paths or accessions), concatenate them.
@@ -468,7 +410,6 @@ def run_reference_guided(
     is_paired = bool(read1 and read2)
 
     # Trimming with fastp
-    fastp_threads = job_data.get("fastp_threads", 0)
     fastp_thr_opt = f"--thread {fastp_threads}" if fastp_threads and fastp_threads > 0 else ""
 
     trim1 = outdir / f"{sample_name}_1.trim.fastq"
@@ -498,7 +439,6 @@ def run_reference_guided(
         run_command(f"bwa index {multi_ref}", f"BWA index {multi_ref.name}")
 
     sam = outdir / f"{sample_name}.sam"
-    align_threads = job_data.get("align_threads", 0)
     bwa_thr_opt = f"-t {align_threads}" if align_threads and align_threads > 0 else ""
 
     if is_paired:
@@ -521,7 +461,6 @@ def run_reference_guided(
 
     # Variant calling with bcftools
     vcf_gz = outdir / f"{sample_name}.vcf.gz"
-    region = job_data.get("region")
     region_opt = f"-r {region} " if region else ""
     run_command(
         f"bcftools mpileup -Ou -f {multi_ref} {region_opt}{bam_sorted} | "
@@ -531,7 +470,6 @@ def run_reference_guided(
     run_command(f"bcftools index {vcf_gz}", f"Index VCF {sample_name}")
 
     # Low-coverage mask BED (depth-based masking similar to original pipeline)
-    depth_cutoff = int(job_data.get("depth_cutoff", 10))
     mask_bed = None
     if depth_cutoff > 0:
         mask_bed = outdir / f"{sample_name}.lowcov_dp{depth_cutoff}.bed"
@@ -547,7 +485,7 @@ def run_reference_guided(
 
     # Consensus
     is_segmented = len(contigs) > 1
-    emit_per_segment = bool(job_data.get("per_segment_consensus")) if single_multi_input else True
+    emit_per_segment = bool(per_segment_consensus) if single_multi_input else True
 
     consensus_segments: List[str] = []
     legacy_consensus_files: List[Path] = []

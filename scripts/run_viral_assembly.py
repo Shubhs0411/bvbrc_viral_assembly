@@ -10,7 +10,8 @@ import time
 import traceback
 from time import strftime, localtime
 
-from reference_guided_assembly import run_reference_guided
+from reference_guided_assembly import run_reference_guided_resolved
+from sra_staging import ensure_sra_fastqs
 
 #
 # Determine paths
@@ -42,6 +43,45 @@ DEFAULT_STRATEGY = "IRMA"
 DEFAULT_IRMA_MODULE = "FLU"
 MAX_RETRIES = 5
 RETRY_DELAY = 10
+
+
+def _parse_string_list(v):
+  if v is None:
+    return None
+  if isinstance(v, list):
+    vals = [str(x).strip() for x in v if str(x).strip()]
+    return vals or None
+  if isinstance(v, str):
+    vals = [x.strip() for x in v.split(";") if x.strip()]
+    return vals or None
+  return None
+
+
+def _resolve_reference_inputs(job_data):
+  """
+  Read reference tokens from job JSON (runner-only). No legacy key aliases.
+
+  - reference_type genbank: require reference_input (string, list, or ';'-separated accessions).
+  - reference_type fasta: require reference_fasta_file (path string, list, or ';'-separated paths).
+  """
+  reference_type = str(job_data.get("reference_type") or "").lower()
+  if reference_type not in {"genbank", "fasta"}:
+    raise ValueError("reference_type must be 'genbank' or 'fasta' for reference-guided strategy.")
+
+  if reference_type == "genbank":
+    tokens = _parse_string_list(job_data.get("reference_input"))
+    if not tokens:
+      raise ValueError(
+        "reference_input is required for GenBank references (e.g. 'NC_045512.2' or 'NC_045512.2;MN908947.3')."
+      )
+    return reference_type, tokens
+
+  tokens = _parse_string_list(job_data.get("reference_fasta_file"))
+  if not tokens:
+    raise ValueError(
+      "reference_fasta_file is required for FASTA references (workspace path(s) or local path(s))."
+    )
+  return reference_type, tokens
 
 def fetch_file_from_ws(ws_path, local_path):
   """Fetch a file from workspace to local path using p3-cp."""
@@ -334,6 +374,26 @@ if __name__ == "__main__" :
   # strategy_lower already computed above
 
   if strategy_lower == "reference_guided":
+    try:
+      reference_type, reference_tokens = _resolve_reference_inputs(job_data)
+    except Exception as e:
+      print(f"Error: invalid reference input for reference-guided strategy: {e}")
+      sys.exit(-1)
+
+    # Stage workspace / local reference FASTA paths to scratch (p3-cp or dev copy).
+    if reference_type == "fasta":
+      ref_dir = os.path.join(output_dir, "reference_inputs")
+      os.makedirs(ref_dir, exist_ok=True)
+      staged_tokens = []
+      for i, tok in enumerate(reference_tokens):
+        ext = os.path.splitext(str(tok))[1] or ".fasta"
+        local_ref = os.path.join(ref_dir, f"ref_{i}{ext}")
+        if not fetch_file_from_ws(tok, local_ref):
+          print(f"Error: Failed to stage reference FASTA from {tok!r}.")
+          sys.exit(-1)
+        staged_tokens.append(local_ref)
+      reference_tokens = staged_tokens
+
     # Prepare local read paths for reference-guided assembly
     local_read1 = None
     local_read2 = None
@@ -365,22 +425,34 @@ if __name__ == "__main__" :
         print("Error: Failed to fetch single-end read.")
         sys.exit(-1)
 
-    # Process SRR ID
+    # Process SRR ID (prefetch + fasterq-dump in sra_staging; assembly receives local FASTQs only)
     elif srr_id:
-      # For reference-guided mode, don't hard-require `p3-sra` (may not exist in all
-      # dev/containers). Instead, let `reference_guided_assembly.py` do:
-      # - `prefetch` to stage <outdir>/<SRR>/<SRR>.sra (if download_sra_from_prefetch=true)
-      # - optional `fasterq-dump` to create FASTQs (if download_fastqs_from_sra=true)
-      local_read1, local_read2, local_single = None, None, None
+      try:
+        local_read1, local_read2, local_single = ensure_sra_fastqs(
+          output_dir, str(srr_id), job_data
+        )
+      except Exception as e:
+        print(f"Error: SRA staging failed: {e}")
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(-1)
 
     # Run reference-guided pipeline
     try:
-      summary = run_reference_guided(
-        job_data,
-        output_dir,
+      summary = run_reference_guided_resolved(
+        output_dir=output_dir,
+        sample_name=str(job_data.get("output_file") or job_data.get("srr_id") or "sample"),
+        reference_type=reference_type,
+        reference_tokens=reference_tokens,
+        email=(job_data.get("email") or os.environ.get("ENTREZ_EMAIL")),
         read1=local_read1,
         read2=local_read2,
         read_single=local_single,
+        segment_names=_parse_string_list(job_data.get("segment_names")),
+        per_segment_consensus=job_data.get("per_segment_consensus"),
+        align_threads=int(job_data.get("align_threads", 0) or 0),
+        fastp_threads=int(job_data.get("fastp_threads", 0) or 0),
+        region=job_data.get("region"),
+        depth_cutoff=int(job_data.get("depth_cutoff", 10) or 10),
       )
       if summary.get("quast_txt"):
         report_details["quast_txt"] = summary["quast_txt"]

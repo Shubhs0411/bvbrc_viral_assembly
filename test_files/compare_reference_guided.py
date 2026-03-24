@@ -163,21 +163,28 @@ def _resolve_local_read_path(p: Optional[str], repo: Path, old_out_rel: str, new
     if cand.exists():
         return str(cand)
 
+    old_out_base = Path(old_out_rel)
+    if not old_out_base.is_absolute():
+        old_out_base = (repo / old_out_base).resolve()
+    new_out_base = Path(new_out_rel)
+    if not new_out_base.is_absolute():
+        new_out_base = (repo / new_out_base).resolve()
+
     # Remap old_results/... and new_results/... prefixes to the provided output folders
     parts = Path(p).parts
     if parts:
         if parts[0] == "old_results":
-            remap = (repo / old_out_rel / Path(*parts[1:])).resolve()
+            remap = (old_out_base / Path(*parts[1:])).resolve()
             if remap.exists():
                 return str(remap)
         if parts[0] == "new_results":
-            remap = (repo / new_out_rel / Path(*parts[1:])).resolve()
+            remap = (new_out_base / Path(*parts[1:])).resolve()
             if remap.exists():
                 return str(remap)
 
     # Common case: JSON points at old_results/<file>, but caller used runs/old_results.
     # Try basename under old_out.
-    remap = (repo / old_out_rel / Path(p).name).resolve()
+    remap = (old_out_base / Path(p).name).resolve()
     if remap.exists():
         return str(remap)
 
@@ -205,6 +212,24 @@ def _run_new_locally(job: dict, repo: Path, new_out: Path, old_out_rel: str, new
         read2 = _resolve_local_read_path(pe.get("read2"), repo, old_out_rel, new_out_rel)
     elif isinstance(se, dict) and se.get("read"):
         read_single = _resolve_local_read_path(se.get("read"), repo, old_out_rel, new_out_rel)
+    else:
+        # Local-compare convenience:
+        # If the job only specifies srr_id (backend mode), reuse FASTQs produced by the
+        # original pipeline run under --old-out.
+        srr = str(job.get("srr_id") or "")
+        if srr:
+            old_out_abs = Path(old_out_rel)
+            if not old_out_abs.is_absolute():
+                old_out_abs = (repo / old_out_abs).resolve()
+            else:
+                old_out_abs = old_out_abs.resolve()
+            r1 = old_out_abs / f"{srr}_1.fastq"
+            r2 = old_out_abs / f"{srr}_2.fastq"
+            rs = old_out_abs / f"{srr}.fastq"
+            if r1.exists() and r2.exists():
+                read1, read2 = str(r1), str(r2)
+            elif rs.exists():
+                read_single = str(rs)
 
     print("[Running] JSON-driven reference-guided (local mode; no workspace fetch)")
     summary = run_reference_guided(
@@ -236,8 +261,19 @@ def main() -> int:
     args = ap.parse_args()
 
     repo = Path(args.workdir).resolve() if args.workdir else Path(__file__).resolve().parents[1]
-    old_out = (repo / args.old_out).resolve()
-    new_out = (repo / args.new_out).resolve()
+
+    # Allow absolute output paths (useful on WSL to avoid /mnt/c I/O issues).
+    old_out = Path(args.old_out)
+    if not old_out.is_absolute():
+        old_out = (repo / old_out).resolve()
+    else:
+        old_out = old_out.resolve()
+
+    new_out = Path(args.new_out)
+    if not new_out.is_absolute():
+        new_out = (repo / new_out).resolve()
+    else:
+        new_out = new_out.resolve()
 
     csv_path = Path(args.csv_path).resolve()
     job_json = Path(args.job_json).resolve()
@@ -253,7 +289,20 @@ def main() -> int:
         )
         # Run "new" pipeline locally (avoid BV-BRC workspace tooling)
         job = json.loads(job_json.read_text())
-        _run_new_locally(job, repo, new_out, args.old_out, args.new_out)
+
+        # Speed up local parity: if the old run already produced a real
+        # "<SRR>/<SRR>.sra" under --old-out, copy it into the new output so
+        # run_reference_guided can skip prefetch.
+        srr = str(job.get("srr_id") or "")
+        if srr:
+            old_sra = old_out / srr / f"{srr}.sra"
+            new_sra = new_out / srr / f"{srr}.sra"
+            if old_sra.exists() and not new_sra.exists():
+                (new_out / srr).mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(str(old_sra), str(new_sra))
+
+        _run_new_locally(job, repo, new_out, str(old_out), str(new_out))
 
     # Load job to infer sample name and expected outputs
     job = json.loads(job_json.read_text())

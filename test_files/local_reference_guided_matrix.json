@@ -4,8 +4,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2",
-      "genbank_accession": "NC_045512.2",
+      "reference_input": "NC_045512.2",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_paired_single",
       "email": "you@org.org",
@@ -20,8 +19,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2",
-      "genbank_accession": "NC_045512.2",
+      "reference_input": "NC_045512.2",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_single_single",
       "email": "you@org.org",
@@ -35,14 +33,11 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2",
-      "genbank_accession": "NC_045512.2",
+      "reference_input": "NC_045512.2",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_sra_single",
       "email": "you@org.org",
-      "srr_id": "SRR28752452",
-      "download_sra_from_prefetch": true,
-      "download_fastqs_from_sra": true
+      "srr_id": "SRR28752452"
     }
   },
   {
@@ -50,8 +45,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2;MN908947.3",
-      "genbank_accession": "NC_045512.2;MN908947.3",
+      "reference_input": "NC_045512.2;MN908947.3",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_paired_multi",
       "email": "you@org.org",
@@ -66,8 +60,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2;MN908947.3",
-      "genbank_accession": "NC_045512.2;MN908947.3",
+      "reference_input": "NC_045512.2;MN908947.3",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_single_multi",
       "email": "you@org.org",
@@ -81,14 +74,11 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "genbank",
-      "reference_assembly": "NC_045512.2;MN908947.3",
-      "genbank_accession": "NC_045512.2;MN908947.3",
+      "reference_input": "NC_045512.2;MN908947.3",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_genbank_sra_multi",
       "email": "you@org.org",
-      "srr_id": "SRR28752452",
-      "download_sra_from_prefetch": true,
-      "download_fastqs_from_sra": true
+      "srr_id": "SRR28752452"
     }
   },
   {
@@ -96,8 +86,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "fasta",
-      "reference_assembly": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
-      "fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
+      "reference_fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_fasta_paired",
       "paired_end_lib": {
@@ -111,8 +100,7 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "fasta",
-      "reference_assembly": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
-      "fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
+      "reference_fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_fasta_single",
       "single_end_lib": {
@@ -125,13 +113,10 @@
     "job": {
       "strategy": "reference_guided",
       "reference_type": "fasta",
-      "reference_assembly": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
-      "fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
+      "reference_fasta_file": "/mnt/c/Users/sdeshmuk/Desktop/bvbrc_viral_assembly/test_files/Influenza_Genome.fasta",
       "output_path": "/user@bvbrc/home/test",
       "output_file": "rg_fasta_sra",
-      "srr_id": "SRR28752452",
-      "download_sra_from_prefetch": true,
-      "download_fastqs_from_sra": true
+      "srr_id": "SRR28752452"
     }
   }
 ]
